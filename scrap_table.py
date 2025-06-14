@@ -1,60 +1,58 @@
 import requests
 import boto3
 import uuid
-from datetime import datetime
+from bs4 import BeautifulSoup
 
 def lambda_handler(event, context):
-    # Determinar año (puedes parametrizarlo desde `event` si lo deseas)
-    year = datetime.utcnow().year
-    url = f"https://ultimosismo.igp.gob.pe/api/ultimo-sismo/ajaxb/{year}"
+    url_objetivo = "https://ultimosismo.igp.gob.pe/ultimo-sismo/sismos-reportados"
 
-    # Llamada al endpoint JSON
-    response = requests.get(url)
+    response = requests.get(
+        "https://app.scrapingbee.com/api/v1/",
+        params={
+            "api_key": "Q28G9Y461TDRVIEDBS9ZG9UMH4BAWBC70NW133N5KPKY311E9L3SX10PKQVJ2D4L2KI9DJTYY7813CJV",
+            "url": url_objetivo,
+            "render_js": "true",
+            "wait": "5000"  # Esperar 5 segundos para que cargue la tabla
+        }
+    )
+
     if response.status_code != 200:
         return {
             'statusCode': response.status_code,
-            'body': 'Error al acceder al endpoint de sismos'
+            'body': 'Error al acceder a la página usando ScrapingBee'
         }
 
-    # La respuesta es directamente una lista de dicts
-    sismos = response.json()
+    soup = BeautifulSoup(response.content, "html.parser")
+    table = soup.find('table')
+    if not table:
+        return {
+            'statusCode': 404,
+            'body': soup.prettify()[:5000]  # Para debug, puedes quitar esto luego
+        }
 
-    # Volcar a un formato uniforme para DynamoDB
-    items = []
-    for i, s in enumerate(sismos, start=1):
-        items.append({
-            'id': str(uuid.uuid4()),
-            '#': i,
-            'codigo': s.get('codigo'),
-            'fecha_local': s.get('fecha_local'),
-            'hora_local': s.get('hora_local'),
-            'fecha_utc': s.get('fecha_utc'),
-            'hora_utc': s.get('hora_utc'),
-            'latitud': float(s.get('latitud', 0)),
-            'longitud': float(s.get('longitud', 0)),
-            'magnitud': float(s.get('magnitud', 0)),
-            'profundidad': s.get('profundidad'),
-            'referencia': s.get('referencia'),
-            'intensidad': s.get('intensidad'),
-        })
+    headers = [th.text.strip() for th in table.find_all('th')]
+    rows = []
+    for tr in table.find_all('tr')[1:11]:
+        cells = tr.find_all('td')
+        if len(cells) != len(headers):
+            continue
+        row_data = {headers[i]: cells[i].text.strip() for i in range(len(cells))}
+        row_data['id'] = str(uuid.uuid4())
+        rows.append(row_data)
 
-    # Guardar los datos en DynamoDB
     dynamodb = boto3.resource('dynamodb')
-    table = dynamodb.Table('TablaWebScraping2')
+    table = dynamodb.Table('SismosIGP')
 
-    # Borrar todos los ítems existentes (opcional)
     scan = table.scan()
     with table.batch_writer() as batch:
-        for each in scan.get('Items', []):
-            batch.delete_item(Key={'id': each['id']})
+        for item in scan.get('Items', []):
+            batch.delete_item(Key={'id': item['id']})
 
-    # Insertar los nuevos datos
     with table.batch_writer() as batch:
-        for item in items:
-            batch.put_item(Item=item)
+        for row in rows:
+            batch.put_item(Item=row)
 
-    # Retornar el resultado como JSON
     return {
         'statusCode': 200,
-        'body': items
+        'body': rows
     }

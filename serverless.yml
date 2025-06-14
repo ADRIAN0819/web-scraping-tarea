@@ -17,17 +17,17 @@ functions:
         - ./**
     events:
       - http:
-          path: /scrape/table
+          path: /scrape/sismos
           method: get
           cors: true
           integration: lambda
 
 resources:
   Resources:
-    TablaWebScraping2:           # <-- nombre interno del recurso
+    SismosIGP:
       Type: AWS::DynamoDB::Table
       Properties:
-        TableName: TablaWebScraping2   # <-- nuevo nombre de la tabla
+        TableName: SismosIGP
         AttributeDefinitions:
           - AttributeName: id
             AttributeType: S
